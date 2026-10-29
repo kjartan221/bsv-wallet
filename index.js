@@ -203,6 +203,42 @@ try {
   if (__DEV__) console.warn('[Push] background handler registration failed — push disabled', e)
 }
 
+// Step 3: fill in the curves QuickCrypto'''s subtle leaves out.
+//
+// Ed25519 and X25519 are commented out of its generateKey, and the MLS stack
+// prefers subtle whenever it exists rather than falling back — so a partial
+// subtle breaks KeyPackage minting outright. After the propagation above,
+// because install() replaces globalThis.crypto wholesale; before the router,
+// because hpke caches subtle per instance.
+try {
+  const { installCurve25519Subtle } = require('./packages/expo-wallet-toolbox/core/crypto/curve25519Subtle')
+  if (!installCurve25519Subtle() && __DEV__) {
+    console.warn('[Crypto Setup] Curve25519 shim not installed: no crypto.subtle to wrap')
+  }
+} catch (e) {
+  console.error('[Crypto Setup] Curve25519 shim failed to install', e)
+}
+
+// Every WebCrypto operation the MLS stack needs, checked once at startup.
+// quick-crypto's gaps are invisible until the exact call is made, and finding
+// them one failed exchange at a time is how the last two days went.
+if (__DEV__) {
+  void (async () => {
+    try {
+      const {
+        checkWebCrypto,
+        formatConformance
+      } = require('./packages/expo-wallet-toolbox/core/crypto/webCryptoConformance')
+      const results = await checkWebCrypto(globalThis.crypto.subtle)
+      const text = formatConformance(results)
+      if (results.some(r => !r.ok)) console.error(text)
+      else console.log(text)
+    } catch (e) {
+      console.error('[Crypto Setup] conformance check could not run', e)
+    }
+  })()
+}
+
 // Require after installation: static imports execute before this module body
 // and would let SDK primitives cache the pure-JS fallback before the seam exists.
 require('expo-router/entry')
