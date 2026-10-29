@@ -198,6 +198,8 @@ export type { AmountInputAsset } from './components/wallet/AmountInput'
 
 // Contacts, profile, and the pencil-edit affordance they share (2026-09-18)
 export { ContactsScreen } from './screens/ContactsScreen'
+export { MessagingPlaygroundScreen } from './screens/MessagingPlaygroundScreen'
+export { MessagingThreadScreen } from './screens/MessagingThreadScreen'
 export { ContactScreen } from './screens/ContactScreen'
 export { NewContactScreen } from './screens/NewContactScreen'
 export { ProfileScreen } from './screens/ProfileScreen'
