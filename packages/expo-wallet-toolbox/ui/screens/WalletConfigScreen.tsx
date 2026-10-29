@@ -65,6 +65,7 @@ function appVersionLabel(): string {
 import { ConfigPanel, useMessageBoxConfig } from '../components/pay/MessageBoxConfig'
 import { GroupedSection } from '../components/ui/GroupedList'
 import { ListRow } from '../components/ui/ListRow'
+import { messagingPlaygroundEnabled } from '../../core/messaging/playgroundFlag'
 import { showAlert } from '../components/ui/AlertCard'
 import { showToast } from '../components/ui/Toast'
 import { PrivateKey } from '@bsv/sdk'
@@ -140,6 +141,7 @@ const NEXT_MOCK_KEY: Record<MockPresentKey, MockPresentKey> = {
 export function WalletConfigScreen({ hideLogout = false }: { hideLogout?: boolean } = {}) {
   const versionLabel = useMemo(() => appVersionLabel(), [])
   const { t } = useTranslation()
+  const showMessagingRow = messagingPlaygroundEnabled()
   const { colors } = useTheme()
   const { router, useLocalSearchParams } = loadExpoRouter()
   const { section } = useLocalSearchParams<{ section?: string }>()
@@ -621,8 +623,19 @@ export function WalletConfigScreen({ hideLogout = false }: { hideLogout?: boolea
             icon="checkmark-done-circle-outline"
             iconColor="#30D158"
             onPress={() => router.push('/wallet-check' as any)}
-            isLast
+            isLast={!showMessagingRow}
           />
+          {/* The messaging playground's only entrance. Off outside the
+              development profiles until us-1 serves the live socket. */}
+          {showMessagingRow && (
+            <ListRow
+              label={t('messaging_title')}
+              icon="chatbubbles-outline"
+              iconColor="#5856D6"
+              onPress={() => router.push('/messaging')}
+              isLast
+            />
+          )}
         </GroupedSection>
 
         {/* ── Advanced ── */}
