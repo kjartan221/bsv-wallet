@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import type { GroupMessagingClient, LiveStatus } from '@bsv/group-messaging'
 import type { Failure } from '../../core/messaging/managedInvitations'
 import { deletePlaygroundData, openPlaygroundClient } from '../../core/messaging/playground'
+import { messageIdOf } from '../../core/messaging/messageIds'
 import { ManagedInvitations, MemoryShelf } from '../../core/messaging/managedInvitations'
 import { PlaygroundChatIds } from '../../core/messaging/playgroundChatIds'
 import type { AppChain } from '../../core/networks'
@@ -146,8 +147,12 @@ async function openOnce(
     // while the chat is closed is still part of it, and the library hands each
     // one to a subscriber exactly once.
     client.on('message', ({ chatId, sender, content }) => {
-      if (content.type !== 'text' || content.body === undefined) return
-      void transcript.append({ chatId, sender, body: content.body, at: Date.now() }).catch(() => undefined)
+      // Every type, not only text. A reply or a reaction that was dropped
+      // here would be a message the library delivered exactly once and this
+      // host threw away.
+      void transcript
+        .append({ chatId, id: messageIdOf(content), sender, at: Date.now(), content })
+        .catch(() => undefined)
     })
 
     return {

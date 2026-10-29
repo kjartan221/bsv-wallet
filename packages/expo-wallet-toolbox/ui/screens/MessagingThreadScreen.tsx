@@ -31,10 +31,13 @@ import { useTranslation } from 'react-i18next'
 import { useTheme, spacing, radii, typography, useWallet } from '@bsv/expo-wallet-toolbox'
 import PressableScale from '../components/ui/PressableScale'
 import { showToast } from '../components/ui/Toast'
+import { showAlert } from '../components/ui/AlertCard'
 import { useMessagingPlayground } from '../hooks/useMessagingPlayground'
 import { messagingPlaygroundEnabled } from '../../core/messaging/playground'
 import { abbreviateKey } from '../../core/pay/counterparty'
 import { useContactsStore } from '../hooks/useContactsStore'
+import { newMessageId, withMessageId } from '../../core/messaging/messageIds'
+import type { MessageContent } from '@bsv/group-messaging'
 import type { ContactRow } from '../../core/contacts/contactsStore'
 
 type IoniconsComponent = typeof import('@expo/vector-icons').Ionicons
@@ -60,8 +63,12 @@ function loadExpoRouter(): ExpoRouterModule {
 interface Bubble {
   id: string
   sender: string
-  body: string
   mine: boolean
+  content: MessageContent
+  /** Reactions other people put on this message, by emoji. */
+  reactions: string[]
+  /** What this message answers, when it is a reply. */
+  answering?: { sender: string; body: string }
 }
 
 export function MessagingThreadScreen() {
@@ -93,6 +100,8 @@ export function MessagingThreadScreen() {
   const [localName, setLocalName] = useState<string>()
   const scroller = useRef<ScrollView>(null)
   const [keyboard, setKeyboard] = useState(0)
+  const [replyTo, setReplyTo] = useState<Bubble>()
+  const [asMarkdown, setAsMarkdown] = useState(false)
 
   useEffect(() => {
     const showEvt = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow'
@@ -149,13 +158,41 @@ export function MessagingThreadScreen() {
     if (transcript === undefined || client === undefined || chatId === undefined) return
     try {
       const stored = await transcript.list(chatId)
+      const byId = new Map(stored.map(m => [m.id, m]))
+
+      // Reactions and read receipts are not messages in their own right: they
+      // decorate or acknowledge one. Folding them in here keeps the list a
+      // list of things somebody said.
+      const reactions = new Map<string, string[]>()
+      for (const m of stored) {
+        const target = m.content.reaction?.reference
+        if (m.content.type !== 'reaction' || target === undefined) continue
+        const current = reactions.get(target) ?? []
+        reactions.set(
+          target,
+          m.content.reaction?.action === 'removed'
+            ? current.filter(e => e !== m.content.reaction?.content)
+            : [...current, m.content.reaction?.content ?? '']
+        )
+      }
+
       setBubbles(
-        stored.map((m, index) => ({
-          id: `${m.sender}-${m.at}-${index}`,
-          sender: m.sender,
-          body: m.body,
-          mine: m.sender === client.identityKey
-        }))
+        stored
+          .filter(m => m.content.type !== 'reaction' && m.content.type !== 'readReceipt')
+          .map(m => {
+            const answered =
+              m.content.replyTo === undefined || m.content.replyTo === null ? undefined : byId.get(m.content.replyTo)
+            return {
+              id: m.id,
+              sender: m.sender,
+              mine: m.sender === client.identityKey,
+              content: m.content,
+              reactions: reactions.get(m.id) ?? [],
+              ...(answered === undefined
+                ? {}
+                : { answering: { sender: answered.sender, body: answered.content.body ?? '' } })
+            }
+          })
       )
     } catch (cause) {
       // A handle left over from a cleared or reopened playground. Reported
@@ -170,6 +207,23 @@ export function MessagingThreadScreen() {
   useEffect(() => {
     void reload()
   }, [reload])
+
+  // Opening the chat is the event a read receipt reports. Sent once per visit
+  // and never rendered: it acknowledges, it does not say anything.
+  useEffect(() => {
+    const client = playground.client
+    if (client === undefined || chatId === undefined) return
+    void (async () => {
+      try {
+        const group = await client.getGroup(chatId)
+        await group?.sendContent(withMessageId({ v: 1, type: 'readReceipt', body: '' }, newMessageId()))
+      } catch (cause) {
+        // Nothing depends on it arriving, so a failure is worth seeing and
+        // not worth interrupting anyone over.
+        console.error('[messaging] read receipt failed', cause)
+      }
+    })()
+  }, [playground.client, chatId])
 
   useEffect(() => {
     const client = playground.client
@@ -195,18 +249,74 @@ export function MessagingThreadScreen() {
     try {
       const group = await client.getGroup(chatId)
       if (group === undefined) throw new Error(t('messaging_chat_missing'))
-      await group.sendText(body)
+
+      // Built here rather than through sendText/sendReply, because every
+      // message needs the id a later reply or reaction will point at, and the
+      // typed helpers do not carry one.
+      const id = newMessageId()
+      const base: MessageContent = asMarkdown
+        ? { v: 1, type: 'markdown', body, markdown: body }
+        : { v: 1, type: 'text', body }
+      const content = withMessageId(replyTo === undefined ? base : { ...base, type: 'reply', replyTo: replyTo.id }, id)
+      await group.sendContent(content)
       setDraft('')
+      setReplyTo(undefined)
       // MLS never hands a sender its own message back, so the author's copy is
       // the host's to write down.
-      await playground.transcript?.append({ chatId, sender: mine ?? '', body, at: Date.now() })
+      await playground.transcript?.append({ chatId, id, sender: mine ?? '', at: Date.now(), content })
       await reload()
     } catch (cause) {
       showToast(cause instanceof Error ? cause.message : String(cause), { type: 'error' })
     } finally {
       setSending(false)
     }
-  }, [playground.client, playground.transcript, chatId, draft, mine, reload, t])
+  }, [playground.client, playground.transcript, chatId, draft, mine, reload, replyTo, asMarkdown, t])
+
+  /** A reaction is its own message, pointing at the one it decorates. */
+  const react = useCallback(
+    async (bubble: Bubble, emoji: string) => {
+      const client = playground.client
+      if (client === undefined || chatId === undefined) return
+      try {
+        const group = await client.getGroup(chatId)
+        if (group === undefined) throw new Error(t('messaging_chat_missing'))
+        const id = newMessageId()
+        const content = withMessageId(
+          {
+            v: 1,
+            type: 'reaction',
+            body: emoji,
+            reaction: { reference: bubble.id, action: 'added', content: emoji, schema: 'unicode' }
+          },
+          id
+        )
+        await group.sendContent(content)
+        await playground.transcript?.append({ chatId, id, sender: mine ?? '', at: Date.now(), content })
+        await reload()
+      } catch (cause) {
+        console.error('[messaging] reacting failed', cause)
+        showToast(cause instanceof Error ? cause.message : String(cause), { type: 'error' })
+      }
+    },
+    [playground.client, playground.transcript, chatId, mine, reload, t]
+  )
+
+  const onBubble = useCallback(
+    async (bubble: Bubble) => {
+      const choice = await showAlert({
+        title: bubble.content.body ?? '',
+        buttons: [
+          { text: t('messaging_reply'), key: 'reply' },
+          { text: `${t('messaging_react')} 👍`, key: '👍' },
+          { text: `${t('messaging_react')} 🎉`, key: '🎉' },
+          { text: t('cancel'), key: 'cancel', style: 'cancel' }
+        ]
+      })
+      if (choice === 'reply') setReplyTo(bubble)
+      else if (choice === '👍' || choice === '🎉') await react(bubble, choice)
+    },
+    [react, t]
+  )
 
   const subtitle = useMemo(() => t('messaging_member_count', { count: members }), [members, t])
 
@@ -332,7 +442,15 @@ export function MessagingThreadScreen() {
           onContentSizeChange={() => scroller.current?.scrollToEnd({ animated: true })}
         >
           {bubbles.map(bubble => (
-            <View key={bubble.id} style={[styles.bubbleRow, bubble.mine && styles.bubbleRowMine]}>
+            <PressableScale
+              key={bubble.id}
+              onLongPress={() => void onBubble(bubble)}
+              haptic="tap"
+              scaleTo={0.99}
+              style={[styles.bubbleRow, bubble.mine && styles.bubbleRowMine]}
+              accessibilityRole="button"
+              accessibilityLabel={bubble.content.body ?? t('messaging_untitled_chat')}
+            >
               <View
                 style={[
                   styles.bubble,
@@ -348,13 +466,69 @@ export function MessagingThreadScreen() {
                     {contacts.find(c => c.identityKey === bubble.sender)?.name ?? abbreviateKey(bubble.sender)}
                   </Text>
                 )}
+
+                {bubble.answering !== undefined && (
+                  <View style={[styles.quote, { borderLeftColor: colors.separator }]}>
+                    <Text style={[styles.quoteWho, { color: colors.textTertiary }]} numberOfLines={1}>
+                      {contacts.find(c => c.identityKey === bubble.answering?.sender)?.name ??
+                        abbreviateKey(bubble.answering.sender)}
+                    </Text>
+                    <Text style={[styles.quoteBody, { color: colors.textTertiary }]} numberOfLines={2}>
+                      {bubble.answering.body}
+                    </Text>
+                  </View>
+                )}
+
+                {/* The library's rule: anything unknown must still surface its
+                    body, so an older build degrades instead of showing
+                    nothing. Markdown is shown as its plain-text fallback —
+                    rendering it properly is a renderer, not a playground. */}
                 <Text style={[styles.bubbleBody, { color: bubble.mine ? colors.textOnAccent : colors.textPrimary }]}>
-                  {bubble.body}
+                  {bubble.content.body ?? ''}
                 </Text>
+
+                {(bubble.content.attachments ?? []).map(attachment => (
+                  <Text
+                    key={attachment.contentHash}
+                    style={[styles.bubbleMeta, { color: bubble.mine ? colors.textOnAccent : colors.textTertiary }]}
+                    numberOfLines={1}
+                  >
+                    {`📎 ${attachment.filename ?? attachment.mimeType}`}
+                  </Text>
+                ))}
+
+                {bubble.content.type === 'markdown' && (
+                  <Text style={[styles.bubbleMeta, { color: bubble.mine ? colors.textOnAccent : colors.textTertiary }]}>
+                    {t('messaging_markdown_sent')}
+                  </Text>
+                )}
+
+                {bubble.reactions.length > 0 && (
+                  <Text style={[styles.bubbleReactions, { color: colors.textSecondary }]}>
+                    {bubble.reactions.join(' ')}
+                  </Text>
+                )}
               </View>
-            </View>
+            </PressableScale>
           ))}
         </ScrollView>
+      )}
+
+      {replyTo !== undefined && (
+        <View style={[styles.replyBar, { marginBottom: keyboard > 0 ? 0 : undefined }]}>
+          <Text style={[styles.replyBarText, { color: colors.textSecondary }]} numberOfLines={1}>
+            {`${t('messaging_replying_to')}: ${replyTo.content.body ?? ''}`}
+          </Text>
+          <PressableScale
+            onPress={() => setReplyTo(undefined)}
+            haptic="tap"
+            style={styles.modeBtn}
+            accessibilityRole="button"
+            accessibilityLabel={t('cancel')}
+          >
+            <Ionicons name="close" size={18} color={colors.textTertiary} />
+          </PressableScale>
+        </View>
       )}
 
       <View
@@ -380,6 +554,16 @@ export function MessagingThreadScreen() {
           style={[styles.composerInput, { color: colors.textPrimary, backgroundColor: colors.fillTertiary }]}
           accessibilityLabel={t('messaging_composer_placeholder')}
         />
+        <PressableScale
+          onPress={() => setAsMarkdown(current => !current)}
+          haptic="tap"
+          style={[styles.modeBtn, asMarkdown && { backgroundColor: colors.fillTertiary }]}
+          accessibilityRole="button"
+          accessibilityLabel={t('messaging_markdown_toggle')}
+          accessibilityState={{ selected: asMarkdown }}
+        >
+          <Ionicons name="logo-markdown" size={18} color={asMarkdown ? colors.accent : colors.textTertiary} />
+        </PressableScale>
         <PressableScale
           onPress={() => void send()}
           haptic="confirm"
@@ -428,6 +612,20 @@ const styles = StyleSheet.create({
   bubbleTheirs: { borderBottomLeftRadius: radii.sm, borderWidth: StyleSheet.hairlineWidth },
   bubbleWho: { ...typography.caption2 },
   bubbleBody: { ...typography.body },
+  bubbleMeta: { ...typography.caption2, opacity: 0.8 },
+  bubbleReactions: { ...typography.caption1 },
+  quote: { borderLeftWidth: 2, paddingLeft: spacing.sm, gap: 1, opacity: 0.9 },
+  quoteWho: { ...typography.caption2, fontWeight: '600' },
+  quoteBody: { ...typography.caption2 },
+  replyBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.sm
+  },
+  replyBarText: { ...typography.caption1, flex: 1 },
+  modeBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radii.sm },
   centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.md, paddingHorizontal: spacing.xxl },
   emptyTitle: { ...typography.headline, fontWeight: '600', textAlign: 'center' },
