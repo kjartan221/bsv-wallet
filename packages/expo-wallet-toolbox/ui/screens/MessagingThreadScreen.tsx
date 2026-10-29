@@ -455,8 +455,12 @@ export function MessagingThreadScreen() {
                 style={[
                   styles.bubble,
                   {
-                    backgroundColor: bubble.mine ? colors.accent : colors.backgroundElevated,
-                    borderColor: colors.separator
+                    // Mine is a filled surface, theirs a raised one. Both are
+                    // translucent or themed tokens, so they invert with the
+                    // palette; `accent` is the CTA colour — black in light,
+                    // white in dark — and a slab of it reads as a button.
+                    backgroundColor: bubble.mine ? colors.fill : colors.surfaceRaised,
+                    borderColor: bubble.mine ? colors.separator : colors.surfaceRaisedBorder
                   },
                   bubble.mine ? styles.bubbleMine : styles.bubbleTheirs
                 ]}
@@ -483,14 +487,12 @@ export function MessagingThreadScreen() {
                     body, so an older build degrades instead of showing
                     nothing. Markdown is shown as its plain-text fallback —
                     rendering it properly is a renderer, not a playground. */}
-                <Text style={[styles.bubbleBody, { color: bubble.mine ? colors.textOnAccent : colors.textPrimary }]}>
-                  {bubble.content.body ?? ''}
-                </Text>
+                <Text style={[styles.bubbleBody, { color: colors.textPrimary }]}>{bubble.content.body ?? ''}</Text>
 
                 {(bubble.content.attachments ?? []).map(attachment => (
                   <Text
                     key={attachment.contentHash}
-                    style={[styles.bubbleMeta, { color: bubble.mine ? colors.textOnAccent : colors.textTertiary }]}
+                    style={[styles.bubbleMeta, { color: colors.textTertiary }]}
                     numberOfLines={1}
                   >
                     {`📎 ${attachment.filename ?? attachment.mimeType}`}
@@ -498,7 +500,7 @@ export function MessagingThreadScreen() {
                 ))}
 
                 {bubble.content.type === 'markdown' && (
-                  <Text style={[styles.bubbleMeta, { color: bubble.mine ? colors.textOnAccent : colors.textTertiary }]}>
+                  <Text style={[styles.bubbleMeta, { color: colors.textTertiary }]}>
                     {t('messaging_markdown_sent')}
                   </Text>
                 )}
