@@ -466,18 +466,20 @@ export function MessagingThreadScreen() {
                 ]}
               >
                 {!bubble.mine && (
-                  <Text style={[styles.bubbleWho, { color: colors.textTertiary }]} numberOfLines={1}>
+                  <Text style={[styles.bubbleWho, { color: colors.textSecondary }]} numberOfLines={1}>
                     {contacts.find(c => c.identityKey === bubble.sender)?.name ?? abbreviateKey(bubble.sender)}
                   </Text>
                 )}
 
                 {bubble.answering !== undefined && (
                   <View style={[styles.quote, { borderLeftColor: colors.separator }]}>
-                    <Text style={[styles.quoteWho, { color: colors.textTertiary }]} numberOfLines={1}>
-                      {contacts.find(c => c.identityKey === bubble.answering?.sender)?.name ??
-                        abbreviateKey(bubble.answering.sender)}
+                    <Text style={[styles.quoteWho, { color: colors.textSecondary }]} numberOfLines={1}>
+                      {bubble.answering.sender === mine
+                        ? t('messaging_you')
+                        : (contacts.find(c => c.identityKey === bubble.answering?.sender)?.name ??
+                          abbreviateKey(bubble.answering.sender))}
                     </Text>
-                    <Text style={[styles.quoteBody, { color: colors.textTertiary }]} numberOfLines={2}>
+                    <Text style={[styles.quoteBody, { color: colors.textSecondary }]} numberOfLines={2}>
                       {bubble.answering.body}
                     </Text>
                   </View>
@@ -492,7 +494,7 @@ export function MessagingThreadScreen() {
                 {(bubble.content.attachments ?? []).map(attachment => (
                   <Text
                     key={attachment.contentHash}
-                    style={[styles.bubbleMeta, { color: colors.textTertiary }]}
+                    style={[styles.bubbleMeta, { color: colors.textSecondary }]}
                     numberOfLines={1}
                   >
                     {`📎 ${attachment.filename ?? attachment.mimeType}`}
@@ -500,7 +502,7 @@ export function MessagingThreadScreen() {
                 ))}
 
                 {bubble.content.type === 'markdown' && (
-                  <Text style={[styles.bubbleMeta, { color: colors.textTertiary }]}>
+                  <Text style={[styles.bubbleMeta, { color: colors.textSecondary }]}>
                     {t('messaging_markdown_sent')}
                   </Text>
                 )}
